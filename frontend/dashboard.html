@@ -1,0 +1,931 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="description" content="StudyTrack Dashboard — Manage your studies, track progress, and collaborate.">
+  <title>Dashboard — StudyTrack</title>
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>📚</text></svg>">
+  <script>
+    (function(){
+      const t = localStorage.getItem('st_theme') || 'system';
+      const eff = t === 'system'
+        ? (window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light')
+        : t;
+      document.documentElement.setAttribute('data-theme', eff);
+    })();
+  </script>
+  <link rel="stylesheet" href="/css/styles.css">
+  <link rel="stylesheet" href="/css/components.css">
+</head>
+<body>
+  <!-- Sidebar -->
+  <aside class="app-sidebar" id="sidebar" aria-label="Main navigation">
+    <div class="sidebar-header" id="sidebar-brand-btn" role="button" tabindex="0" title="Go to Dashboard" style="cursor: pointer;">
+      <div class="sidebar-logo">S</div>
+      <span class="sidebar-brand">StudyTrack</span>
+    </div>
+    <nav class="sidebar-nav">
+      <button class="nav-item active" data-page="dashboard" aria-current="page">
+        <span class="nav-icon">📊</span> Dashboard
+      </button>
+      <button class="nav-item" data-page="timer">
+        <span class="nav-icon">⏱️</span> Study Timer
+      </button>
+      <button class="nav-item" data-page="tasks">
+        <span class="nav-icon">✅</span> Tasks
+      </button>
+      <button class="nav-item" data-page="calendar">
+        <span class="nav-icon">📅</span> Calendar
+      </button>
+      <button class="nav-item" data-page="analytics">
+        <span class="nav-icon">📈</span> Analytics
+      </button>
+
+      <div class="nav-section">
+        <div class="nav-section-title">Collaborate</div>
+      </div>
+      <button class="nav-item" data-page="groups">
+        <span class="nav-icon">👥</span> Study Groups
+      </button>
+      <button class="nav-item" data-page="channels">
+        <span class="nav-icon">📺</span> Mentor Channels
+      </button>
+      <button class="nav-item" data-page="assignments">
+        <span class="nav-icon">📝</span> Assignments
+      </button>
+
+      <div class="nav-section">
+        <div class="nav-section-title">Progress</div>
+      </div>
+      <button class="nav-item" data-page="badges">
+        <span class="nav-icon">🏆</span> Badges
+      </button>
+    </nav>
+    <div class="sidebar-footer">
+      <button class="nav-item" data-page="profile">
+        <span class="nav-icon">👤</span> Profile
+      </button>
+    </div>
+  </aside>
+
+  <!-- Header -->
+  <header class="app-header" id="header">
+    <div class="header-left">
+      <button class="mobile-menu-btn btn-icon" id="mobile-menu-btn" aria-label="Toggle sidebar menu">☰</button>
+      <div class="search-bar">
+        <span class="search-icon">🔍</span>
+        <input type="search" placeholder="Search tasks, groups, channels..." id="global-search" aria-label="Global search">
+      </div>
+    </div>
+    <div class="header-right">
+      <button class="theme-toggle" id="theme-toggle" aria-label="Toggle theme" title="Toggle theme">☀️</button>
+      <div class="relative">
+        <button class="notification-btn" id="notification-btn" aria-label="Notifications">
+          🔔
+          <span class="notification-badge hidden" id="notification-count">0</span>
+        </button>
+      </div>
+      <div class="relative">
+        <button class="user-avatar" id="user-avatar-btn" aria-label="User menu">
+          <span id="avatar-initial">U</span>
+        </button>
+      </div>
+    </div>
+  </header>
+
+  <!-- Main Content -->
+  <main class="app-main" id="app-main">
+    <div class="main-content" id="main-content">
+      <!-- Dynamic content loaded here -->
+      <div class="flex justify-center items-center" style="padding:6rem 0">
+        <div class="spinner spinner-lg"></div>
+      </div>
+    </div>
+  </main>
+
+  <!-- Toast Container -->
+  <div id="toast-container" class="toast-container"></div>
+
+  <!-- Sidebar overlay for mobile -->
+  <div class="modal-overlay hidden" id="sidebar-overlay" style="z-index:100"></div>
+
+  <script type="module">
+    import { api, getAccessToken, getRefreshToken, getStoredUser, clearTokens, setStoredUser, showToast, escapeHtml, createElement, closeModal, debounce } from '/js/utils.js';
+    import { cycleTheme, getThemeIcon } from '/js/themeManager.js';
+    import { connectSocket, disconnectSocket } from '/js/socket.js';
+    import { initDashboard } from '/js/dashboard.js';
+    import { initTimer } from '/js/timer.js';
+    import { initTasks } from '/js/tasks.js';
+    import { initCalendar } from '/js/calendar.js';
+    import { initAnalytics } from '/js/analytics.js';
+    import { initBadges } from '/js/badges.js';
+    import { initGroups, leaveActiveGroup } from '/js/groups.js';
+    import { initChannels, leaveActiveChannel } from '/js/mentorChannels.js';
+    import { initAssignments } from '/js/assignments.js';
+    import { initHeatmap } from '/js/heatmap.js';
+
+    // ── Auth Guard & Session Setup ──
+    const token = getAccessToken();
+    const refreshToken = getRefreshToken();
+    if (!token && !refreshToken) {
+      window.location.href = '/';
+    }
+
+    let currentUser = getStoredUser(); // Instant restore from storage to avoid empty UI / false redirects
+    let currentPage = 'dashboard';
+
+    // ── Navigation Initializers ──
+    const pageInitializers = {
+      dashboard: initDashboard,
+      timer: initTimer,
+      tasks: initTasks,
+      calendar: initCalendar,
+      analytics: initAnalytics,
+      badges: initBadges,
+      groups: initGroups,
+      channels: initChannels,
+      assignments: initAssignments,
+      profile: initProfile
+    };
+
+    // ── Route Parser ──
+    function parseCurrentRoute() {
+      const hash = window.location.hash || '';
+      const clean = hash.replace(/^#\/?/, '').trim();
+      if (!clean) return { page: 'dashboard', param: null };
+
+      const parts = clean.split('/').filter(Boolean);
+      const page = parts[0] || 'dashboard';
+      const param = parts.slice(1).join('/') || null;
+
+      if (pageInitializers[page]) {
+        return { page, param };
+      }
+      return { page: 'dashboard', param: null };
+    }
+
+    let isNavigating = false;
+    function navigateTo(page, param = null, updateHash = true) {
+      if (!pageInitializers[page]) page = 'dashboard';
+      
+      // If navigating away from groups or channels, leave active rooms
+      if (page !== 'groups') leaveActiveGroup();
+      if (page !== 'channels') leaveActiveChannel();
+
+      currentPage = page;
+
+      // Update nav state
+      document.querySelectorAll('.nav-item').forEach(item => {
+        const isMatch = item.dataset.page === page;
+        item.classList.toggle('active', isMatch);
+        if (isMatch) item.setAttribute('aria-current', 'page');
+        else item.removeAttribute('aria-current');
+      });
+
+      // Close mobile sidebar
+      document.getElementById('sidebar')?.classList.remove('open');
+      document.getElementById('sidebar-overlay')?.classList.add('hidden');
+
+      // Update URL hash using history API (prevents synthetic hashchange event loops)
+      if (updateHash) {
+        const targetHash = param ? `#/${page}/${param}` : `#/${page}`;
+        if (window.location.hash !== targetHash) {
+          try {
+            history.replaceState(null, '', targetHash);
+          } catch {
+            window.location.hash = targetHash;
+          }
+        }
+      }
+
+      // Initialize page
+      const content = document.getElementById('main-content');
+      const init = pageInitializers[page];
+      if (init) {
+        init(content, currentUser, param);
+      }
+    }
+
+    // Expose window.studyTrack early so modules can access during init
+    window.studyTrack = {
+      navigateTo,
+      getCurrentUser: () => currentUser
+    };
+
+    // Popstate listener for browser back/forward buttons
+    window.addEventListener('popstate', () => {
+      const { page, param } = parseCurrentRoute();
+      navigateTo(page, param, false);
+    });
+
+    // ── Notification Helpers ──
+    function getNotifIcon(type) {
+      if (!type) return '🔔';
+      if (type.includes('group_message')) return '💬';
+      if (type.includes('channel_message')) return '📢';
+      if (type.includes('group_join') || type.includes('channel_join')) return '✨';
+      if (type.includes('group_leave') || type.includes('channel_leave')) return '🚪';
+      if (type.includes('assignment')) return '📝';
+      if (type.includes('badge')) return '🏆';
+      if (type.includes('task')) return '✅';
+      return '🔔';
+    }
+
+    // ── Initialize App ──
+    async function initApp() {
+      // 1. Initial UI population from stored session to prevent blank screen or jumpy layouts
+      if (currentUser) {
+        const initial = document.getElementById('avatar-initial');
+        if (initial) initial.textContent = currentUser.name?.charAt(0)?.toUpperCase() || 'U';
+      }
+
+      // 2. Validate and refresh user profile with backend
+      try {
+        const result = await api.getMe();
+        if (result?.success) {
+          currentUser = result.data;
+          setStoredUser(currentUser);
+          const initial = document.getElementById('avatar-initial');
+          if (initial) initial.textContent = currentUser.name?.charAt(0)?.toUpperCase() || 'U';
+        } else if (!currentUser) {
+          clearTokens();
+          window.location.href = '/';
+          return;
+        }
+      } catch (err) {
+        // If unauthenticated or token expired beyond refresh, redirect to login
+        if (!getAccessToken() || (!currentUser && (err.message.includes('401') || err.message.includes('unauthorized') || err.message.includes('token')))) {
+          clearTokens();
+          window.location.href = '/';
+          return;
+        }
+        // If transient connection issue, proceed with stored session without kicking user out
+      }
+
+      // Connect socket & listen for notifications
+      const socket = connectSocket();
+      if (socket) {
+        socket.on('notification', (data) => {
+          // Audio chime using Web Audio API
+          try {
+            const ctx = new (window.AudioContext || window.webkitAudioContext)();
+            const osc = ctx.createOscillator();
+            const gain = ctx.createGain();
+            osc.type = 'sine';
+            osc.frequency.setValueAtTime(587.33, ctx.currentTime); // D5
+            osc.frequency.setValueAtTime(880, ctx.currentTime + 0.1); // A5
+            gain.gain.setValueAtTime(0.15, ctx.currentTime);
+            gain.gain.exponentialRampToValueAtTime(0.01, ctx.currentTime + 0.35);
+            osc.connect(gain);
+            gain.connect(ctx.destination);
+            osc.start();
+            osc.stop(ctx.currentTime + 0.35);
+          } catch {}
+
+          const icon = getNotifIcon(data.type);
+          showToast(`${icon} ${data.title}: ${data.message}`, 'info');
+          loadNotificationCount();
+
+          // If dropdown is open, prepend the notification live
+          const listContainer = document.getElementById('notif-list-inner');
+          if (listContainer) {
+            const emptyState = listContainer.querySelector('.empty-state');
+            if (emptyState) emptyState.remove();
+
+            const notifRow = createElement('div', {
+              className: 'notification-item flex items-center justify-between unread',
+              style: { padding: '0.75rem 1rem', borderBottom: '1px solid var(--border-color)', cursor: 'pointer', transition: 'background 0.15s ease' }
+            });
+
+            const notifContent = createElement('div', {
+              style: { flex: '1', minWidth: '0', marginRight: '0.5rem' },
+              onClick: () => {
+                handleNotificationClick(data);
+                const dd = document.querySelector('.notification-dropdown');
+                if (dd) { dd.remove(); notifDropdownOpen = false; }
+              }
+            }, [
+              createElement('div', { className: 'text-sm font-semibold flex items-center gap-2' }, [
+                createElement('span', { textContent: icon }),
+                createElement('span', { textContent: data.title })
+              ]),
+              createElement('div', { className: 'text-xs text-muted', textContent: data.message, style: { wordBreak: 'break-word', margin: '2px 0' } }),
+              createElement('div', { className: 'text-xs text-tertiary', textContent: 'Just now' })
+            ]);
+
+            notifRow.appendChild(notifContent);
+            listContainer.insertBefore(notifRow, listContainer.firstChild);
+          }
+        });
+      }
+
+      // Update theme icon
+      document.getElementById('theme-toggle').textContent = getThemeIcon();
+
+      // Load notifications count
+      loadNotificationCount();
+
+      // Restore active page from URL hash (e.g. #/calendar, #/tasks, #/groups/123)
+      const { page, param } = parseCurrentRoute();
+      navigateTo(page, param, false);
+    }
+
+    async function handleNotificationClick(n) {
+      if (n._id || n.id) {
+        try {
+          await api.markNotificationRead(n._id || n.id);
+          loadNotificationCount();
+        } catch {}
+      }
+
+      const type = n.type || '';
+      const entityType = n.relatedEntity?.type || '';
+
+      if (type.includes('group') || entityType === 'group') {
+        navigateTo('groups', n.relatedEntity?.id || null);
+      } else if (type.includes('channel') || entityType === 'channel') {
+        navigateTo('channels', n.relatedEntity?.id || null);
+      } else if (type.includes('assignment') || entityType === 'assignment') {
+        navigateTo('assignments');
+      } else if (type.includes('badge') || entityType === 'badge') {
+        navigateTo('badges');
+      } else if (type.includes('task') || entityType === 'task') {
+        navigateTo('tasks');
+      }
+    }
+
+    // ── Brand Logo / Header Click ──
+    document.getElementById('sidebar-brand-btn')?.addEventListener('click', () => {
+      navigateTo('dashboard');
+    });
+
+    // ── Nav Click Handlers ──
+    document.querySelectorAll('.nav-item[data-page]').forEach(item => {
+      item.addEventListener('click', () => navigateTo(item.dataset.page));
+    });
+
+    // ── Mobile Menu ──
+    document.getElementById('mobile-menu-btn').addEventListener('click', () => {
+      const sidebar = document.getElementById('sidebar');
+      const overlay = document.getElementById('sidebar-overlay');
+      sidebar.classList.toggle('open');
+      overlay.classList.toggle('hidden');
+    });
+
+    document.getElementById('sidebar-overlay').addEventListener('click', () => {
+      document.getElementById('sidebar').classList.remove('open');
+      document.getElementById('sidebar-overlay').classList.add('hidden');
+    });
+
+    // ── Theme Toggle ──
+    document.getElementById('theme-toggle').addEventListener('click', () => {
+      cycleTheme();
+      document.getElementById('theme-toggle').textContent = getThemeIcon();
+    });
+
+    // ── Notifications ──
+    async function loadNotificationCount() {
+      try {
+        const result = await api.getNotifications(1);
+        if (result?.success) {
+          const badge = document.getElementById('notification-count');
+          if (result.data.unread > 0) {
+            badge.textContent = result.data.unread > 99 ? '99+' : result.data.unread;
+            badge.classList.remove('hidden');
+          } else {
+            badge.textContent = '0';
+            badge.classList.add('hidden');
+          }
+        }
+      } catch {}
+    }
+
+    let notifDropdownOpen = false;
+    document.getElementById('notification-btn').addEventListener('click', async () => {
+      const existing = document.querySelector('.notification-dropdown');
+      if (existing) { existing.remove(); notifDropdownOpen = false; return; }
+
+      notifDropdownOpen = true;
+      try {
+        const result = await api.getNotifications(1);
+        if (!result?.success) return;
+
+        const dropdown = createElement('div', {
+          className: 'notification-dropdown card',
+          style: {
+            position: 'absolute',
+            top: 'calc(100% + 8px)',
+            right: '0',
+            width: '340px',
+            maxHeight: '440px',
+            boxShadow: 'var(--shadow-xl)',
+            zIndex: '150',
+            padding: '0',
+            overflow: 'hidden',
+            background: 'var(--bg-card)'
+          }
+        });
+
+        // Header
+        const header = createElement('div', {
+          className: 'notification-dropdown-header flex justify-between items-center',
+          style: { padding: '0.75rem 1rem', borderBottom: '1px solid var(--border-color)', background: 'var(--bg-secondary)' }
+        }, [
+          createElement('h4', { className: 'font-semibold text-sm', textContent: 'Notifications' }),
+          createElement('div', { className: 'flex gap-2' }, [
+            createElement('button', {
+              className: 'btn btn-ghost btn-sm',
+              style: { fontSize: '0.75rem', padding: '0.2rem 0.5rem' },
+              textContent: 'Mark read',
+              onClick: async () => {
+                await api.markAllNotificationsRead();
+                loadNotificationCount();
+                dropdown.querySelectorAll('.unread').forEach(n => n.classList.remove('unread'));
+              }
+            }),
+            createElement('button', {
+              className: 'btn btn-ghost btn-sm text-danger',
+              style: { fontSize: '0.75rem', padding: '0.2rem 0.5rem' },
+              textContent: 'Clear all',
+              onClick: async () => {
+                await api.clearAllNotifications();
+                loadNotificationCount();
+                const list = dropdown.querySelector('#notif-list-inner');
+                if (list) {
+                  list.innerHTML = `
+                    <div class="empty-state" style="padding: 2rem">
+                      <div class="empty-state-icon" style="font-size: 2rem">🔔</div>
+                      <div class="empty-state-text">No notifications</div>
+                    </div>
+                  `;
+                }
+              }
+            })
+          ])
+        ]);
+        dropdown.appendChild(header);
+
+        // List
+        const listContainer = createElement('div', {
+          id: 'notif-list-inner',
+          style: { maxHeight: '360px', overflowY: 'auto' }
+        });
+
+        const notifications = result.data.notifications || [];
+        if (notifications.length === 0) {
+          listContainer.innerHTML = `
+            <div class="empty-state" style="padding: 2rem">
+              <div class="empty-state-icon" style="font-size: 2rem">🔔</div>
+              <div class="empty-state-text">No notifications yet</div>
+            </div>
+          `;
+        } else {
+          notifications.forEach(n => {
+            const notifRow = createElement('div', {
+              className: `notification-item flex items-center justify-between ${n.read ? '' : 'unread'}`,
+              style: { padding: '0.75rem 1rem', borderBottom: '1px solid var(--border-color)', cursor: 'pointer', transition: 'background 0.15s ease' }
+            });
+
+            const icon = getNotifIcon(n.type);
+            const notifContent = createElement('div', {
+              style: { flex: '1', minWidth: '0', marginRight: '0.5rem' },
+              onClick: async () => {
+                if (!n.read) {
+                  await api.markNotificationRead(n._id);
+                  notifRow.classList.remove('unread');
+                  loadNotificationCount();
+                }
+                dropdown.remove();
+                notifDropdownOpen = false;
+                handleNotificationClick(n);
+              }
+            }, [
+              createElement('div', { className: 'text-sm font-semibold flex items-center gap-2' }, [
+                createElement('span', { textContent: icon }),
+                createElement('span', { textContent: n.title })
+              ]),
+              createElement('div', { className: 'text-xs text-muted', textContent: n.message, style: { wordBreak: 'break-word', margin: '2px 0' } }),
+              createElement('div', { className: 'text-xs text-tertiary', textContent: new Date(n.createdAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) })
+            ]);
+
+            const delBtn = createElement('button', {
+              className: 'btn btn-ghost btn-icon btn-sm text-muted',
+              style: { opacity: '0.7', flexShrink: '0', padding: '0.25rem' },
+              title: 'Delete notification',
+              textContent: '🗑️',
+              onClick: async (e) => {
+                e.stopPropagation();
+                try {
+                  await api.deleteNotification(n._id);
+                  notifRow.remove();
+                  loadNotificationCount();
+                  if (listContainer.children.length === 0) {
+                    listContainer.innerHTML = `
+                      <div class="empty-state" style="padding: 2rem">
+                        <div class="empty-state-icon" style="font-size: 2rem">🔔</div>
+                        <div class="empty-state-text">No notifications</div>
+                      </div>
+                    `;
+                  }
+                } catch (err) {
+                  showToast(err.message, 'error');
+                }
+              }
+            });
+            delBtn.onmouseenter = () => delBtn.style.opacity = '1';
+            delBtn.onmouseleave = () => delBtn.style.opacity = '0.7';
+
+            notifRow.appendChild(notifContent);
+            notifRow.appendChild(delBtn);
+            listContainer.appendChild(notifRow);
+          });
+        }
+
+        dropdown.appendChild(listContainer);
+        document.getElementById('notification-btn').parentElement.appendChild(dropdown);
+
+        // Close on outside click
+        setTimeout(() => {
+          document.addEventListener('click', function closeNotif(e) {
+            if (!dropdown.contains(e.target) && e.target !== document.getElementById('notification-btn')) {
+              dropdown.remove();
+              notifDropdownOpen = false;
+              document.removeEventListener('click', closeNotif);
+            }
+          });
+        }, 10);
+      } catch (err) {
+        console.error('Notification error:', err);
+      }
+    });
+
+    // ── User Menu ──
+    document.getElementById('user-avatar-btn').addEventListener('click', () => {
+      const existing = document.querySelector('.profile-dropdown');
+      if (existing) { existing.remove(); return; }
+
+      const dropdown = createElement('div', { className: 'profile-dropdown' }, [
+        createElement('button', {
+          className: 'profile-dropdown-item',
+          textContent: '👤  Profile',
+          onClick: () => { dropdown.remove(); navigateTo('profile'); }
+        }),
+        createElement('button', {
+          className: 'profile-dropdown-item danger',
+          textContent: '🚪  Sign Out',
+          onClick: async () => {
+            await api.logout();
+            disconnectSocket();
+            clearTokens();
+            window.location.href = '/';
+          }
+        })
+      ]);
+
+      document.getElementById('user-avatar-btn').parentElement.appendChild(dropdown);
+      setTimeout(() => {
+        document.addEventListener('click', function closeProfile(e) {
+          if (!dropdown.contains(e.target) && e.target !== document.getElementById('user-avatar-btn')) {
+            dropdown.remove();
+            document.removeEventListener('click', closeProfile);
+          }
+        });
+      }, 10);
+    });
+
+    // ── Profile Page (View & Edit Mode) ──
+    function initProfile(container, user) {
+      container.innerHTML = '';
+      const page = createElement('div', { className: 'animate-fade-in-up' });
+
+      page.appendChild(createElement('div', { className: 'page-header' }, [
+        createElement('h1', { className: 'page-title', textContent: 'User Profile' }),
+        createElement('p', { className: 'page-subtitle', textContent: 'Manage your study preferences, account details, and goals' })
+      ]));
+
+      const profileCardContainer = createElement('div', { id: 'profile-card-wrapper', style: { maxWidth: '680px' } });
+      page.appendChild(profileCardContainer);
+      container.appendChild(page);
+
+      renderProfileViewMode(profileCardContainer, user || currentUser);
+    }
+
+    function renderProfileViewMode(container, user) {
+      container.innerHTML = '';
+      const card = createElement('div', { className: 'card', style: { padding: '1.75rem' } });
+
+      const header = createElement('div', {
+        className: 'flex justify-between items-start flex-wrap gap-4 border-b pb-4',
+        style: { borderBottom: '1px solid var(--border-color)', marginBottom: '1.25rem' }
+      });
+
+      const userHeader = createElement('div', { className: 'flex items-center gap-3' }, [
+        createElement('div', {
+          className: 'user-avatar',
+          style: { width: '56px', height: '56px', fontSize: '1.5rem', background: 'linear-gradient(135deg, var(--primary-500), var(--primary-700))', color: '#fff' },
+          textContent: user.name?.charAt(0)?.toUpperCase() || 'U'
+        }),
+        createElement('div', {}, [
+          createElement('div', { className: 'flex items-center gap-2' }, [
+            createElement('h2', { className: 'font-bold text-xl', style: { margin: 0 }, textContent: user.name }),
+            createElement('span', { className: `tag ${user.role === 'mentor' ? 'tag-primary' : 'tag-success'} text-xs`, style: { textTransform: 'capitalize' }, textContent: user.role || 'Student' })
+          ]),
+          createElement('div', { className: 'text-sm text-muted', style: { marginTop: '2px' }, textContent: user.email })
+        ])
+      ]);
+
+      const editBtn = createElement('button', {
+        className: 'btn btn-secondary flex items-center gap-1',
+        textContent: '✏️ Edit Profile',
+        onClick: () => renderProfileEditMode(container, user)
+      });
+
+      header.appendChild(userHeader);
+      header.appendChild(editBtn);
+      card.appendChild(header);
+
+      // Read-only Details Grid
+      const detailsGrid = createElement('div', {
+        style: { display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: '1rem', marginBottom: '1.25rem' }
+      });
+
+      // Daily Goal
+      detailsGrid.appendChild(createElement('div', { className: 'card', style: { padding: '1rem', background: 'var(--bg-tertiary)' } }, [
+        createElement('div', { className: 'text-xs text-muted font-medium', textContent: '⏱️ Daily Study Goal' }),
+        createElement('div', { className: 'stat-value', style: { fontSize: '1.3rem', color: 'var(--primary-400)', marginTop: '0.25rem' }, textContent: `${user.preferences?.dailyGoal || 120} minutes` })
+      ]));
+
+      // Weekly Goal
+      detailsGrid.appendChild(createElement('div', { className: 'card', style: { padding: '1rem', background: 'var(--bg-tertiary)' } }, [
+        createElement('div', { className: 'text-xs text-muted font-medium', textContent: '📅 Weekly Study Goal' }),
+        createElement('div', { className: 'stat-value', style: { fontSize: '1.3rem', color: 'var(--primary-400)', marginTop: '0.25rem' }, textContent: `${user.preferences?.weeklyGoal || 600} minutes` })
+      ]));
+
+      card.appendChild(detailsGrid);
+
+      // Subjects Section
+      const subjectsCard = createElement('div', { className: 'card', style: { padding: '1rem', background: 'var(--bg-tertiary)' } }, [
+        createElement('div', { className: 'text-xs text-muted font-medium', style: { marginBottom: '0.5rem' }, textContent: '📚 Preferred Study Subjects' }),
+        createElement('div', { className: 'flex gap-2 flex-wrap' },
+          (user.subjects && user.subjects.length > 0)
+            ? user.subjects.map(s => createElement('span', { className: 'tag tag-primary', textContent: s }))
+            : [createElement('span', { className: 'text-sm text-muted', textContent: 'No subjects specified yet. Click Edit to add subjects.' })]
+        )
+      ]);
+      card.appendChild(subjectsCard);
+
+      container.appendChild(card);
+    }
+
+    function renderProfileEditMode(container, user) {
+      container.innerHTML = '';
+      const card = createElement('div', { className: 'card', style: { padding: '1.75rem' } });
+
+      const header = createElement('div', {
+        className: 'flex justify-between items-center border-b pb-4',
+        style: { borderBottom: '1px solid var(--border-color)', marginBottom: '1.25rem' }
+      }, [
+        createElement('h3', { className: 'font-semibold text-lg', style: { margin: 0 }, textContent: 'Edit Profile Details' }),
+        createElement('span', { className: 'text-xs text-muted', textContent: 'Modify fields and click Save' })
+      ]);
+      card.appendChild(header);
+
+      const form = createElement('form', { className: 'auth-form' });
+      form.innerHTML = `
+        <div class="form-group">
+          <label class="form-label" for="prof-name">Full Name</label>
+          <input class="form-input" type="text" id="prof-name" value="${escapeHtml(user.name)}" required>
+        </div>
+        <div class="form-group">
+          <label class="form-label" for="prof-email">Email Address</label>
+          <input class="form-input" type="email" id="prof-email" value="${escapeHtml(user.email)}" disabled style="opacity:0.7;cursor:not-allowed">
+          <span class="text-xs text-muted" style="margin-top:2px">Email cannot be changed directly</span>
+        </div>
+        <div class="form-group">
+          <label class="form-label" for="prof-subjects">Subjects (comma-separated)</label>
+          <input class="form-input" type="text" id="prof-subjects" value="${escapeHtml((user.subjects || []).join(', '))}" placeholder="Mathematics, Physics, Data Structures, Machine Learning...">
+        </div>
+        <div class="form-row">
+          <div class="form-group">
+            <label class="form-label" for="prof-daily-goal">Daily Goal (minutes)</label>
+            <input class="form-input" type="number" id="prof-daily-goal" value="${user.preferences?.dailyGoal || 120}" min="15" max="720">
+          </div>
+          <div class="form-group">
+            <label class="form-label" for="prof-weekly-goal">Weekly Goal (minutes)</label>
+            <input class="form-input" type="number" id="prof-weekly-goal" value="${user.preferences?.weeklyGoal || 600}" min="60" max="5040">
+          </div>
+        </div>
+        <div class="flex gap-2 justify-end" style="margin-top:1.5rem">
+          <button type="button" class="btn btn-secondary" id="prof-cancel-btn">Cancel</button>
+          <button type="submit" class="btn btn-primary" id="prof-save-btn">Save Changes</button>
+        </div>
+      `;
+
+      form.querySelector('#prof-cancel-btn').onclick = () => {
+        renderProfileViewMode(container, user);
+      };
+
+      form.addEventListener('submit', async (e) => {
+        e.preventDefault();
+        const saveBtn = form.querySelector('#prof-save-btn');
+        saveBtn.disabled = true;
+        saveBtn.textContent = 'Saving...';
+
+        try {
+          const subjects = document.getElementById('prof-subjects').value
+            .split(',').map(s => s.trim()).filter(Boolean);
+          const result = await api.updateMe({
+            name: document.getElementById('prof-name').value,
+            subjects,
+            preferences: {
+              ...user.preferences,
+              dailyGoal: parseInt(document.getElementById('prof-daily-goal').value) || 120,
+              weeklyGoal: parseInt(document.getElementById('prof-weekly-goal').value) || 600
+            }
+          });
+          if (result?.success) {
+            currentUser = result.data;
+            setStoredUser(currentUser);
+            const initial = document.getElementById('avatar-initial');
+            if (initial) initial.textContent = currentUser.name?.charAt(0)?.toUpperCase() || 'U';
+            showToast('Profile updated successfully!', 'success');
+            // Return to read-only View Mode
+            renderProfileViewMode(container, currentUser);
+          }
+        } catch (err) {
+          showToast(err.message, 'error');
+          saveBtn.disabled = false;
+          saveBtn.textContent = 'Save Changes';
+        }
+      });
+
+      card.appendChild(form);
+      container.appendChild(card);
+    }
+
+    // ── Global Search ──
+    const globalSearchInput = document.getElementById('global-search');
+    let searchDropdown = null;
+
+    function closeSearchDropdown() {
+      if (searchDropdown) {
+        searchDropdown.remove();
+        searchDropdown = null;
+      }
+    }
+
+    const handleGlobalSearch = debounce(async (query) => {
+      const q = query.trim();
+      if (q.length < 2) {
+        closeSearchDropdown();
+        return;
+      }
+
+      try {
+        const [tasksRes, groupsRes, channelsRes] = await Promise.all([
+          api.getTasks(`search=${encodeURIComponent(q)}&limit=5`),
+          api.getGroups(`search=${encodeURIComponent(q)}&limit=5`),
+          api.getChannels(`search=${encodeURIComponent(q)}`)
+        ]);
+
+        closeSearchDropdown();
+
+        const searchContainer = globalSearchInput.closest('.search-bar');
+        searchDropdown = createElement('div', {
+          className: 'search-results-dropdown card',
+          style: {
+            position: 'absolute',
+            top: 'calc(100% + 8px)',
+            left: '0',
+            right: '0',
+            maxHeight: '380px',
+            overflowY: 'auto',
+            zIndex: '150',
+            padding: '0.75rem',
+            boxShadow: 'var(--shadow-xl)',
+            background: 'var(--bg-card)'
+          }
+        });
+
+        let totalResults = 0;
+
+        // Tasks section
+        const tasks = tasksRes?.data?.tasks || [];
+        if (tasks.length > 0) {
+          totalResults += tasks.length;
+          searchDropdown.appendChild(createElement('div', {
+            className: 'text-xs font-semibold text-muted',
+            style: { padding: '0.25rem 0.5rem', textTransform: 'uppercase', letterSpacing: '0.05em' },
+            textContent: 'Tasks'
+          }));
+          tasks.forEach(t => {
+            const item = createElement('div', {
+              className: 'flex items-center justify-between',
+              style: { padding: '0.5rem', borderRadius: 'var(--radius-md)', cursor: 'pointer', marginBottom: '2px' },
+              onClick: () => {
+                closeSearchDropdown();
+                globalSearchInput.value = '';
+                navigateTo('tasks');
+              }
+            }, [
+              createElement('div', { className: 'text-sm font-medium', textContent: `✅ ${t.title}` }),
+              createElement('span', { className: 'text-xs text-muted', textContent: t.subject })
+            ]);
+            item.onmouseenter = () => item.style.background = 'var(--bg-hover)';
+            item.onmouseleave = () => item.style.background = 'transparent';
+            searchDropdown.appendChild(item);
+          });
+        }
+
+        // Groups section
+        const groups = groupsRes?.data?.groups || [];
+        if (groups.length > 0) {
+          totalResults += groups.length;
+          searchDropdown.appendChild(createElement('div', {
+            className: 'text-xs font-semibold text-muted',
+            style: { padding: '0.5rem 0.5rem 0.25rem', textTransform: 'uppercase', letterSpacing: '0.05em' },
+            textContent: 'Study Groups'
+          }));
+          groups.forEach(g => {
+            const item = createElement('div', {
+              className: 'flex items-center justify-between',
+              style: { padding: '0.5rem', borderRadius: 'var(--radius-md)', cursor: 'pointer', marginBottom: '2px' },
+              onClick: () => {
+                closeSearchDropdown();
+                globalSearchInput.value = '';
+                navigateTo('groups');
+              }
+            }, [
+              createElement('div', { className: 'text-sm font-medium', textContent: `👥 ${g.name}` }),
+              createElement('span', { className: 'tag tag-primary text-xs', textContent: g.category || 'General' })
+            ]);
+            item.onmouseenter = () => item.style.background = 'var(--bg-hover)';
+            item.onmouseleave = () => item.style.background = 'transparent';
+            searchDropdown.appendChild(item);
+          });
+        }
+
+        // Channels section
+        const channels = channelsRes?.data || [];
+        if (channels.length > 0) {
+          totalResults += channels.length;
+          searchDropdown.appendChild(createElement('div', {
+            className: 'text-xs font-semibold text-muted',
+            style: { padding: '0.5rem 0.5rem 0.25rem', textTransform: 'uppercase', letterSpacing: '0.05em' },
+            textContent: 'Mentor Channels'
+          }));
+          channels.forEach(c => {
+            const item = createElement('div', {
+              className: 'flex items-center justify-between',
+              style: { padding: '0.5rem', borderRadius: 'var(--radius-md)', cursor: 'pointer', marginBottom: '2px' },
+              onClick: () => {
+                closeSearchDropdown();
+                globalSearchInput.value = '';
+                navigateTo('channels');
+              }
+            }, [
+              createElement('div', { className: 'text-sm font-medium', textContent: `📺 ${c.name}` }),
+              createElement('span', { className: 'text-xs text-muted', textContent: c.subject })
+            ]);
+            item.onmouseenter = () => item.style.background = 'var(--bg-hover)';
+            item.onmouseleave = () => item.style.background = 'transparent';
+            searchDropdown.appendChild(item);
+          });
+        }
+
+        if (totalResults === 0) {
+          searchDropdown.appendChild(createElement('div', {
+            className: 'text-xs text-muted text-center',
+            style: { padding: '1rem' },
+            textContent: `No results for "${escapeHtml(q)}"`
+          }));
+        }
+
+        searchContainer.style.position = 'relative';
+        searchContainer.appendChild(searchDropdown);
+      } catch (err) {
+        console.error('Search error:', err);
+      }
+    }, 250);
+
+    globalSearchInput.addEventListener('input', (e) => handleGlobalSearch(e.target.value));
+
+    document.addEventListener('click', (e) => {
+      if (searchDropdown && !e.target.closest('.search-bar')) {
+        closeSearchDropdown();
+      }
+    });
+
+    document.addEventListener('keydown', (e) => {
+      if (e.key === 'Escape') closeSearchDropdown();
+    });
+
+    // ── Start App ──
+    initApp();
+
+    // Make navigateTo and currentUser available globally for sub-modules
+    window.studyTrack = { navigateTo, getCurrentUser: () => currentUser };
+  </script>
+</body>
+</html>

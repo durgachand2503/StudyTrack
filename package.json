@@ -1,0 +1,18 @@
+{
+  "name": "studytrack-platform",
+  "version": "1.0.0",
+  "description": "StudyTrack - Full-Stack Smart Study Management Platform",
+  "private": true,
+  "scripts": {
+    "install:backend": "npm install --prefix backend",
+    "install:frontend": "npm install --prefix frontend",
+    "install:all": "npm run install:backend && npm run install:frontend",
+    "postinstall": "npm run install:all",
+    "build": "npm --prefix frontend run build",
+    "start": "node backend/server.js",
+    "dev:backend": "npm --prefix backend run dev",
+    "dev:frontend": "npm --prefix frontend run dev",
+    "seed": "npm --prefix backend run seed",
+    "test": "npm --prefix backend run test"
+  }
+}
